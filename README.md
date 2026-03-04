@@ -3,7 +3,7 @@
     <img src="https://github.com/user-attachments/assets/f5c89e11-3071-4618-b0a1-81430195b1e1" alt="Logo"  width="150" height="150">
   </a>
  
-  # _Recognize it_, with [FRS](https://workofaditya.github.io/Mira/)
+  # _Recognize it_, with [FRS](https://github.com/WorkofAditya/FRS)
   
 <p>
  
