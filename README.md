@@ -1,5 +1,28 @@
-# Face-Recognition-System
-This is a advance Face recognition system by Adityasinh Sodha 
+<div align="center">
+  <a href="">
+    <img src="https://github.com/user-attachments/assets/f5c89e11-3071-4618-b0a1-81430195b1e1" alt="Logo"  width="150" height="150">
+  </a>
+ 
+  # _Recognize it_, with [FRS](https://workofaditya.github.io/Mira/)
+  
+<p>
+ 
+  Built to detect, match, and store faces in real time.
+  <br>
+  Powered by intelligent facial encoding and pattern analysis.
+  <br>
+  <b>Developed by <a href="https://github.com/WorkofAditya/">Adityasinh</a></b>
+  <br>
+  <br>
+  
+  <a href="https://github.com/WorkofAditya/FRS/issues">Report a Bug</a>
+  <br>
+  <a href="https://github.com/WorkofAditya/FRS/issues">Request a Feature</a>
+</p>
+</div>
+<br>
+ 
+
 
 ## Overview
 This project implements a face recognition system using a webcam. It can recognize registered faces and display their details, while prompting for input when a new face is detected.
@@ -72,6 +95,7 @@ This project implements a face recognition system using a webcam. It can recogni
 Feel free to fork the repository and make improvements. Contributions are welcome!
 
 ## License
+
 This project is licensed under the MIT License.
 ## Author
 Developed by **Adityasinh**.
