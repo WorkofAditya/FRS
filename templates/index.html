@@ -1,18 +1,27 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Face Recognition</title>
   <link rel="stylesheet" type="text/css" href="/static/style.css">
 </head>
 <body>
-  <h1>Face Recognition</h1>
-  <div id="video-box">
-    <img src="/video" id="video-feed">
-  </div>
-  <br>
-  <input type="text" id="name" placeholder="Enter your name">
-  <br>
-  <button onclick="register()">Register Face</button>
+  <main class="app-shell">
+    <h1>Face Recognition</h1>
+    <p id="status" class="status">Connecting to camera...</p>
+
+    <div id="video-box">
+      <img src="/video" id="video-feed" alt="Live face recognition video feed">
+    </div>
+
+    <form id="register-form" class="register-form">
+      <input type="text" id="name" name="name" placeholder="Enter your name" autocomplete="name">
+      <button type="submit">Register Face</button>
+    </form>
+
+    <p id="message" class="message" role="status"></p>
+  </main>
 
   <script src="/static/script.js"></script>
 </body>

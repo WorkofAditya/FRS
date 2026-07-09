@@ -2,21 +2,23 @@ import os
 import pickle
 import threading
 import time
-import tkinter as tk
-from tkinter import simpledialog
 
 import cv2
 import face_recognition
 import numpy as np
-from PIL import Image, ImageTk
+from flask import Flask, Response, jsonify, render_template, request
 
 REGISTERED_FACES_PATH = "registered_faces.pkl"
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-DISPLAY_FPS = 30
+CAPTURE_FPS = 30
+STREAM_FPS = 30
+JPEG_QUALITY = 80
 RECOGNITION_SCALE = 0.25
 RECOGNITION_FPS = 5
 MATCH_TOLERANCE = 0.5
+
+app = Flask(__name__)
 
 # Load registered faces from file
 if os.path.exists(REGISTERED_FACES_PATH):
@@ -27,6 +29,7 @@ else:
 
 # Global variable to temporarily hold face encoding for new faces
 temp_face_encoding = None
+temp_face_lock = threading.Lock()
 known_face_names = []
 known_face_encodings = []
 known_faces_lock = threading.Lock()
@@ -44,24 +47,27 @@ refresh_known_face_cache()
 
 
 class VideoProcessor:
-    """Capture webcam frames quickly while recognizing faces in the background.
+    """Capture webcam frames, recognize faces, and produce fast MJPEG frames.
 
-    The display loop never performs face encoding. One thread only reads the newest
-    webcam frame, and another slower thread analyzes occasional snapshots. This
-    keeps the video smooth even if face recognition takes longer than one frame.
+    The browser receives a normal multipart MJPEG video stream. Capture,
+    recognition, and streaming are separated so slow face encoding cannot block
+    the live video feed.
     """
 
     def __init__(self, source=0):
         self.capture = cv2.VideoCapture(source)
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        self.capture.set(cv2.CAP_PROP_FPS, CAPTURE_FPS)
         self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self.frame_lock = threading.Lock()
         self.detections_lock = threading.Lock()
+        self.status_lock = threading.Lock()
         self.stopped = threading.Event()
         self.latest_frame = None
         self.latest_detections = []
+        self.latest_status = "Face: None"
 
         self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.recognition_thread = threading.Thread(target=self._recognition_loop, daemon=True)
@@ -72,14 +78,18 @@ class VideoProcessor:
         return self
 
     def _capture_loop(self):
+        frame_delay = 1 / CAPTURE_FPS
         while not self.stopped.is_set():
+            started_at = time.perf_counter()
             ret, frame = self.capture.read()
-            if not ret:
-                time.sleep(0.005)
-                continue
+            if ret:
+                with self.frame_lock:
+                    self.latest_frame = frame
+            else:
+                time.sleep(0.01)
 
-            with self.frame_lock:
-                self.latest_frame = frame
+            elapsed = time.perf_counter() - started_at
+            time.sleep(max(0.001, frame_delay - elapsed))
 
     def _recognition_loop(self):
         recognition_delay = 1 / RECOGNITION_FPS
@@ -90,6 +100,7 @@ class VideoProcessor:
                 detections = recognize_faces(frame)
                 with self.detections_lock:
                     self.latest_detections = detections
+                self._update_status(detections)
 
             elapsed = time.perf_counter() - started_at
             time.sleep(max(0.001, recognition_delay - elapsed))
@@ -104,6 +115,37 @@ class VideoProcessor:
         with self.detections_lock:
             return list(self.latest_detections)
 
+    def get_status(self):
+        with self.status_lock:
+            return self.latest_status
+
+    def _update_status(self, detections):
+        status = "Face: None"
+        for match, _face_location, _face_encoding in detections:
+            if match:
+                status = f"Recognized: {match}"
+            else:
+                status = "New Face Detected: Enter a name and register it."
+                break
+
+        with self.status_lock:
+            self.latest_status = status
+
+    def get_jpeg_frame(self):
+        frame = self.get_frame()
+        if frame is None:
+            return None
+
+        draw_detections(frame, self.get_detections())
+        success, encoded_image = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY],
+        )
+        if not success:
+            return None
+        return encoded_image.tobytes()
+
     def release(self):
         self.stopped.set()
         self.capture_thread.join(timeout=1)
@@ -111,37 +153,15 @@ class VideoProcessor:
         self.capture.release()
 
 
-def capture_new_face():
-    """Called when the user clicks the 'Capture Face' button to store a new face."""
-    global temp_face_encoding
-    if temp_face_encoding is not None:
-        register_new_face(temp_face_encoding)
-        temp_face_encoding = None  # Clear temporary storage after registering the face
-    else:
-        print("No new face detected to capture!")
-
-
-def register_new_face(face_encoding):
-    root = tk.Toplevel()
-    root.withdraw()
-
-    # Ask for user name only to associate with the new face
-    name = simpledialog.askstring("New Face Detected", "Enter your name:", parent=root)
-    if name is None:
-        root.destroy()
-        return
-
-    # Store the new face data with just the name
+def register_new_face(name, face_encoding):
+    """Save the latest unknown face encoding using the provided name."""
     registered_faces[name] = {
         "encoding": face_encoding,
     }
     refresh_known_face_cache()
 
-    # Save the updated registered faces to the file
     with open(REGISTERED_FACES_PATH, "wb") as f:
         pickle.dump(registered_faces, f)
-
-    root.destroy()
 
 
 def recognize_faces(frame):
@@ -176,68 +196,79 @@ def draw_detections(frame, detections):
     """Draw the latest recognition result on the current video frame."""
     global temp_face_encoding
 
-    face_label_text = "Face: None"
     for match, face_location, face_encoding in detections:
         top, right, bottom, left = face_location
         if match:
             color = (0, 255, 0)
             text = match
-            face_label_text = f"Recognized: {match}"
         else:
             color = (0, 0, 255)
             text = "New Face"
-            face_label_text = "New Face Detected: Capture it?"
-            temp_face_encoding = face_encoding
+            with temp_face_lock:
+                temp_face_encoding = face_encoding
 
         cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
         cv2.putText(frame, text, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
-    return face_label_text
 
-
-def main():
-    processor = VideoProcessor().start()
-
-    root = tk.Tk()
-    root.title("Face Recognition System")
-
-    # Video feed label
-    video_label = tk.Label(root)
-    video_label.pack()
-
-    # Label to display recognized face details
-    face_label = tk.Label(root, text="Face: None", font=("Helvetica", 14))
-    face_label.pack()
-
-    # Button to capture and save new face
-    capture_button = tk.Button(root, text="Capture Face", command=capture_new_face, font=("Helvetica", 14))
-    capture_button.pack(pady=10)
-
-    frame_delay_ms = max(1, int(1000 / DISPLAY_FPS))
-
-    def update_frame():
-        frame = processor.get_frame()
+def generate_video_stream():
+    """Yield multipart JPEG frames for the browser video feed."""
+    frame_delay = 1 / STREAM_FPS
+    while True:
+        started_at = time.perf_counter()
+        frame = video_processor.get_jpeg_frame()
         if frame is not None:
-            face_label_text = draw_detections(frame, processor.get_detections())
-            face_label.config(text=face_label_text)
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+            )
 
-            # Convert frame to image and update the GUI
-            img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            imgtk = ImageTk.PhotoImage(image=img)
+        elapsed = time.perf_counter() - started_at
+        time.sleep(max(0.001, frame_delay - elapsed))
 
-            video_label.config(image=imgtk)
-            video_label.image = imgtk
 
-        video_label.after(frame_delay_ms, update_frame)
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-    def on_close():
-        processor.release()
-        root.destroy()
 
-    root.protocol("WM_DELETE_WINDOW", on_close)
-    update_frame()
-    root.mainloop()
+@app.route("/video")
+def video():
+    return Response(
+        generate_video_stream(),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.route("/status")
+def status():
+    return jsonify({"status": video_processor.get_status()})
+
+
+@app.route("/register", methods=["POST"])
+def register():
+    global temp_face_encoding
+
+    name = request.form.get("name", "").strip()
+    if not name:
+        return jsonify({"ok": False, "message": "Please enter a name."}), 400
+
+    with temp_face_lock:
+        face_encoding = temp_face_encoding
+        temp_face_encoding = None
+
+    if face_encoding is None:
+        return jsonify({"ok": False, "message": "No new face detected to register."}), 400
+
+    register_new_face(name, face_encoding)
+    return jsonify({"ok": True, "message": f"Registered {name}."})
+
+
+video_processor = VideoProcessor().start()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        app.run(host="0.0.0.0", port=5000, threaded=True)
+    finally:
+        video_processor.release()
